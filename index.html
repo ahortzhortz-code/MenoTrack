@@ -34,6 +34,15 @@
             <div id="variance-status" class="mt-1 flex flex-wrap gap-2">
                 <span class="text-slate-400 text-sm">ยังไม่มีข้อมูลเปรียบเทียบ</span>
             </div>
+
+            <!-- Latest Cycle Info (New Feature) -->
+            <div id="latest-cycle-info" class="mt-4 hidden border-t border-rose-200 pt-4">
+                <p class="text-slate-700 text-sm font-medium mb-2">รอบเดือนล่าสุด:</p>
+                <div class="bg-white/60 rounded-xl p-3 text-sm text-slate-600 flex justify-between items-center">
+                    <span id="latest-cycle-dates" class="font-medium">-- ถึง --</span>
+                    <span id="latest-cycle-length" class="font-bold text-rose-500 bg-rose-100 px-2.5 py-1 rounded-lg">-- วัน</span>
+                </div>
+            </div>
         </div>
 
         <!-- Insights Section -->
@@ -93,7 +102,7 @@
             </div>
 
             <!-- Toggle Period -->
-            <div class="bg-rose-50 p-4 rounded-2xl flex justify-between items-center mb-6 border border-rose-100">
+            <div class="bg-rose-50 p-4 rounded-2xl flex justify-between items-center mb-4 border border-rose-100">
                 <div>
                     <p class="font-medium text-rose-900">เป็นประจำเดือน</p>
                     <p class="text-xs text-rose-600 mt-0.5">ระบุว่าวันนี้มีรอบเดือน</p>
@@ -102,6 +111,13 @@
                     <input type="checkbox" id="is-period-toggle" class="sr-only peer">
                     <div class="w-11 h-6 bg-rose-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
                 </label>
+            </div>
+
+            <!-- Period Details (End Date) -->
+            <div id="period-details-section" class="mb-6 hidden opacity-0 transition-opacity duration-300">
+                <label class="block text-sm font-medium text-slate-700 mb-1">ระบุวันสิ้นสุด (ถ้าทราบ)</label>
+                <input type="date" id="end-date-input" class="w-full p-2.5 rounded-xl border border-slate-200 text-slate-700 focus:outline-none focus:border-rose-400 focus:ring-1 focus:ring-rose-400">
+                <p class="text-[10px] text-slate-500 mt-1.5">* เลือกระบุเพื่อให้ระบบบันทึกต่อเนื่องหลายวันอัตโนมัติ</p>
             </div>
 
             <!-- Symptoms -->
@@ -151,7 +167,7 @@
     </div>
 
     <script>
-        // --- State Management (ใช้ Local Storage สำหรับบันทึกข้อมูลลงเครื่องผู้ใช้) ---
+        // --- State Management ---
         let userLogs = JSON.parse(localStorage.getItem('menoTrackLogs')) || {}; 
         
         let currentDateView = new Date(); // เดือนที่กำลังแสดง
@@ -167,11 +183,14 @@
         const modalBackdrop = document.getElementById('modal-backdrop');
         const logModal = document.getElementById('log-modal');
         const isPeriodToggle = document.getElementById('is-period-toggle');
+        const periodDetailsSection = document.getElementById('period-details-section');
+        const endDateInput = document.getElementById('end-date-input');
         const symptomsSection = document.getElementById('symptoms-section');
         const modalTitle = document.getElementById('modal-title');
         const daysUntilNextEl = document.getElementById('days-until-next');
         const predictedDateTextEl = document.getElementById('predicted-date-text');
         const varianceStatusEl = document.getElementById('variance-status');
+        const latestCycleInfoEl = document.getElementById('latest-cycle-info');
         const insightsSection = document.getElementById('insights-section');
         const insightsContainer = document.getElementById('insights-container');
 
@@ -203,38 +222,58 @@
             }, 3000);
         }
 
-        // --- Core Logic ---
-
-        function analyzeCycleData() {
-            // ดึงเฉพาะวันที่มีประจำเดือน
+        // จัดกลุ่มวันที่มีประจำเดือนต่อเนื่องกันให้เป็น "รอบ"
+        function getCycles() {
             const periodDates = Object.keys(userLogs)
                 .filter(date => userLogs[date].isPeriod)
                 .sort();
 
-            if (periodDates.length === 0) {
+            if (periodDates.length === 0) return [];
+
+            let cycles = [];
+            let currentCycle = [periodDates[0]];
+
+            for (let i = 1; i < periodDates.length; i++) {
+                const prevDate = parseDateString(currentCycle[currentCycle.length - 1]);
+                const currDate = parseDateString(periodDates[i]);
+                
+                // ถ้าระยะห่างไม่เกิน 3 วัน ถือว่าเป็นรอบเดียวกัน (เผื่อลืมบันทึกบางวัน)
+                if (diffDays(prevDate, currDate) <= 3) { 
+                    currentCycle.push(periodDates[i]);
+                } else {
+                    cycles.push(currentCycle);
+                    currentCycle = [periodDates[i]];
+                }
+            }
+            cycles.push(currentCycle);
+            return cycles;
+        }
+
+        // --- Core Logic ---
+
+        function analyzeCycleData() {
+            const cycles = getCycles();
+
+            if (cycles.length === 0) {
                 daysUntilNextEl.textContent = "รอข้อมูล";
                 predictedDateTextEl.textContent = "โปรดบันทึกวันแรกที่มีประจำเดือน";
                 varianceStatusEl.innerHTML = `<span class="text-slate-400 text-sm">ยังไม่มีข้อมูลเพียงพอสำหรับเปรียบเทียบ</span>`;
+                latestCycleInfoEl.classList.add('hidden');
                 return null;
             }
 
-            // แบ่งกลุ่มรอบเดือน (หาว่ารอบใหม่เริ่มวันไหน)
-            let cycleStartDates = [];
-            for (let i = 0; i < periodDates.length; i++) {
-                if (i === 0) {
-                    cycleStartDates.push(periodDates[i]);
-                } else {
-                    const prevDate = parseDateString(periodDates[i-1]);
-                    const currDate = parseDateString(periodDates[i]);
-                    // ถ้าห่างกันเกิน 3 วัน ถือว่าเป็นรอบใหม่
-                    if (diffDays(prevDate, currDate) > 3) {
-                        cycleStartDates.push(periodDates[i]);
-                    }
-                }
-            }
+            const latestCycle = cycles[cycles.length - 1];
+            const latestStartDateStr = latestCycle[0];
+            const latestEndDateStr = latestCycle[latestCycle.length - 1];
+            
+            const latestStartDate = parseDateString(latestStartDateStr);
+            const latestEndDate = parseDateString(latestEndDateStr);
 
-            const latestStartStr = cycleStartDates[cycleStartDates.length - 1];
-            const latestStartDate = parseDateString(latestStartStr);
+            // อัพเดทข้อมูลความยาวรอบล่าสุดใน UI
+            const cycleLengthDays = diffDays(latestStartDate, latestEndDate) + 1;
+            document.getElementById('latest-cycle-dates').textContent = `${latestStartDate.getDate()} ${monthNames[latestStartDate.getMonth()]} - ${latestEndDate.getDate()} ${monthNames[latestEndDate.getMonth()]}`;
+            document.getElementById('latest-cycle-length').textContent = `${cycleLengthDays} วัน`;
+            latestCycleInfoEl.classList.remove('hidden');
 
             // คำนวณวันรอบถัดไป
             const predictedNextDate = new Date(latestStartDate);
@@ -261,14 +300,14 @@
             predictedDateTextEl.textContent = `วันที่คาดการณ์: ${predictedNextDate.getDate()} ${monthNames[predictedNextDate.getMonth()]}`;
 
             // คำนวณความคลาดเคลื่อน (เปรียบเทียบกับรอบก่อนหน้า)
-            if (cycleStartDates.length > 1) {
-                const latestActualStart = parseDateString(cycleStartDates[cycleStartDates.length - 1]);
-                const prevActualStart = parseDateString(cycleStartDates[cycleStartDates.length - 2]);
+            if (cycles.length > 1) {
+                const prevCycle = cycles[cycles.length - 2];
+                const prevActualStart = parseDateString(prevCycle[0]);
                 
                 const prevPrediction = new Date(prevActualStart);
-                prevPrediction.setDate(prevPrediction.getDate() + 28); 
+                prevPrediction.setDate(prevPrediction.getDate() + averageCycleLength); 
                 
-                const varianceDays = Math.round((latestActualStart - prevPrediction) / (1000 * 60 * 60 * 24));
+                const varianceDays = Math.round((latestStartDate - prevPrediction) / (1000 * 60 * 60 * 24));
 
                 if (varianceDays === 0) {
                     varianceStatusEl.innerHTML = `<span class="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-medium">รอบล่าสุดมาตรงเวลาเป๊ะ! ✨</span>`;
@@ -302,7 +341,22 @@
                 }
             }
 
-            if (recentSymptoms.size === 0) {
+            const cycles = getCycles();
+            let hasDurationWarning = false;
+
+            // ตรวจสอบความยาวของรอบเดือนล่าสุด
+            if (cycles.length > 0) {
+                const latestCycle = cycles[cycles.length - 1];
+                const latestStartDate = parseDateString(latestCycle[0]);
+                const latestEndDate = parseDateString(latestCycle[latestCycle.length - 1]);
+                const cycleDuration = diffDays(latestStartDate, latestEndDate) + 1;
+
+                if (cycleDuration > 7) {
+                    hasDurationWarning = true;
+                }
+            }
+
+            if (recentSymptoms.size === 0 && !hasDurationWarning) {
                 insightsSection.classList.add('hidden');
                 return;
             }
@@ -310,11 +364,23 @@
             insightsSection.classList.remove('hidden');
             let insightsGenerated = false;
 
+            // วิเคราะห์เรื่องระยะเวลาที่นานเกินไป
+            if (hasDurationWarning) {
+                const latestCycle = cycles[cycles.length - 1];
+                const duration = diffDays(parseDateString(latestCycle[0]), parseDateString(latestCycle[latestCycle.length - 1])) + 1;
+                addInsightCard(
+                    '⏳ ประจำเดือนมานานผิดปกติ', 
+                    `รอบล่าสุดคุณมีประจำเดือนต่อเนื่องถึง ${duration} วัน (ปกติควรอยู่ระหว่าง 3-7 วัน) หากมีเลือดออกมากหรือรู้สึกอ่อนเพลียร่วมด้วย ควรปรึกษาแพทย์เฉพาะทาง`,
+                    'bg-purple-50', 'text-purple-800'
+                );
+                insightsGenerated = true;
+            }
+
             // วิเคราะห์อาการ
             if (recentSymptoms.has('cramps_severe') && recentSymptoms.has('flow_heavy')) {
                 addInsightCard(
                     '⚠️ อาการปวดรุนแรงและมามาก', 
-                    'อาจมีความเสี่ยงเกี่ยวกับเยื่อบุโพรงมดลูกเจริญผิดที่ หรือเนื้องอกมดลูก หากอาการกระทบต่อการใช้ชีวิตประจำวัน ควรปรึกษาแพทย์เฉพาะทาง',
+                    'อาจมีความเสี่ยงเกี่ยวกับเยื่อบุโพรงมดลูกเจริญผิดที่ หรือเนื้องอกมดลูก หากอาการกระทบต่อการใช้ชีวิตประจำวัน ควรปรึกษาแพทย์',
                     'bg-red-50', 'text-red-800'
                 );
                 insightsGenerated = true;
@@ -439,6 +505,8 @@
             const existingData = userLogs[dateStr] || { isPeriod: false, symptoms: [] };
             
             isPeriodToggle.checked = existingData.isPeriod;
+            endDateInput.value = ''; // เคลียร์วันที่สิ้นสุดออกทุกครั้งที่เปิด
+            
             toggleSymptomsVisibility();
 
             document.querySelectorAll('#symptoms-section input[type="checkbox"]').forEach(cb => {
@@ -467,8 +535,12 @@
         function toggleSymptomsVisibility() {
             if (isPeriodToggle.checked) {
                 symptomsSection.classList.remove('opacity-50', 'pointer-events-none');
+                periodDetailsSection.classList.remove('hidden');
+                setTimeout(() => periodDetailsSection.classList.remove('opacity-0'), 10);
             } else {
                 symptomsSection.classList.add('opacity-50', 'pointer-events-none');
+                periodDetailsSection.classList.add('opacity-0');
+                setTimeout(() => periodDetailsSection.classList.add('hidden'), 300);
             }
         }
 
@@ -477,23 +549,45 @@
             if (!selectedDateToLog) return;
 
             const isPeriod = isPeriodToggle.checked;
+            const endDateStr = endDateInput.value;
             const selectedSymptoms = [];
             
             document.querySelectorAll('#symptoms-section input[type="checkbox"]:checked').forEach(cb => {
                 selectedSymptoms.push(cb.value);
             });
 
-            // อัพเดทข้อมูลลงใน Object 
-            if (isPeriod || selectedSymptoms.length > 0) {
-                userLogs[selectedDateToLog] = {
-                    isPeriod: isPeriod,
-                    symptoms: selectedSymptoms
-                };
-            } else {
-                delete userLogs[selectedDateToLog]; // ลบออกถ้าไม่มีการบันทึก
+            const startDateObj = parseDateString(selectedDateToLog);
+            let endDateObj = endDateStr ? parseDateString(endDateStr) : startDateObj;
+            
+            if (endDateObj < startDateObj) {
+                endDateObj = startDateObj; // ป้องกันการเลือกวันสิ้นสุดก่อนวันเริ่ม
             }
 
-            // สั่งบันทึกลง Browser Storage (ข้อมูลจะไม่หายแม้ปิดเว็บ หรือเอาไปรันที่ไหน)
+            // ถ้าระบุว่ามีประจำเดือน และมีการเลือกวันสิ้นสุด (Range Logging)
+            if (isPeriod && endDateStr) {
+                let curr = new Date(startDateObj);
+                while (curr <= endDateObj) {
+                    let dStr = getLocalDateString(curr);
+                    let existing = userLogs[dStr] || { isPeriod: false, symptoms: [] };
+                    userLogs[dStr] = {
+                        isPeriod: true,
+                        // บันทึกอาการเฉพาะวันแรกที่กดเลือกเข้ามา เพื่อไม่ให้ข้อมูลรกเกินไป
+                        symptoms: dStr === selectedDateToLog ? selectedSymptoms : existing.symptoms
+                    };
+                    curr.setDate(curr.getDate() + 1);
+                }
+            } else {
+                // บันทึกแบบวันเดียว (Single Day Logic)
+                if (isPeriod || selectedSymptoms.length > 0) {
+                    userLogs[selectedDateToLog] = {
+                        isPeriod: isPeriod,
+                        symptoms: selectedSymptoms
+                    };
+                } else {
+                    delete userLogs[selectedDateToLog]; // ลบออกถ้าไม่มีการบันทึก
+                }
+            }
+
             localStorage.setItem('menoTrackLogs', JSON.stringify(userLogs));
 
             renderCalendar(); 
